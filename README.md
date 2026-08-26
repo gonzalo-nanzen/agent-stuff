@@ -5,8 +5,8 @@ many repos.
 
 ## Guides
 
-- [`guides/package-guide.md`](guides/package-guide.md) — designing a Python
-  package: public surface, altitudes, seams, errors, types, dependency direction.
-  Distilled from flask, fastapi, requests, httpx, pydantic, attrs, click, rich,
-  sqlalchemy and polars, with each rule marked for what transfers to a monorepo
-  and what doesn't.
+- [`guides/package-guide.md`](guides/package-guide.md) — approaching a new Python
+  package or module: naming the domain, drawing the public surface, altitudes,
+  seams, errors, types, docs. Guidelines distilled from flask, fastapi, requests,
+  httpx, pydantic, attrs, click, rich, sqlalchemy and polars, with `requests`
+  walked end to end as a worked example.

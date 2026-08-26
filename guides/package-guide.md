@@ -1,60 +1,47 @@
 # Designing a Python package
 
-Distilled from ten packages that got it right: **flask** 3.1, **fastapi** 0.135,
-**requests** 2.32/main, **httpx** 0.28, **pydantic** 2.12, **attrs** 26.1,
-**click** 8.3, **rich** 14.2, **sqlalchemy** 2.0.49, **polars** 1.44. Every claim
-below was checked against installed source or the upstream repo, not recalled.
+Guidelines for approaching a new package or module, distilled from ten libraries
+that got it right: **flask**, **fastapi**, **requests**, **httpx**, **pydantic**,
+**attrs**, **click**, **rich**, **sqlalchemy**, **polars**.
 
-## How to read this
+**These are guidelines, not rules.** Every one of them is a default worth
+departing from with a reason. Several of the exemplars contradict each other —
+requests gives its exceptions a single root, attrs deliberately gives them none —
+and both are right for their situation. The value is in the reasoning, not the
+verdict.
 
-Most published-package machinery exists for one reason: **they cannot reach their
-callers.** They can't grep your code, can't fix your call site, can't email you.
-Deprecation cycles, tombstone modules, vendored previous majors, semver, stable
-error-code URLs — all of it is the price of unreachable consumers.
+One caveat to carry throughout: a lot of published-package machinery exists
+because those projects **cannot reach their callers**. Deprecation cycles,
+tombstone modules, vendored previous majors, stable error-code URLs. If you know
+every consumer of your package, weigh that ceremony against what it actually buys
+you. Copying the reasoning is the point; copying the ritual is how a package gets
+ornate for free.
 
-In a monorepo you own every call site. So each rule here states:
-
-> what the exemplar does → why it's true **for them** → what survives **for us** →
-> what doesn't transfer
-
-Copying the ceremony without the reason is how a package gets slow and ornate for
-free. Copying the reasoning is the point.
-
-The eight sections follow the order you actually make the decisions.
+The seven sections follow the order you actually make the decisions.
 
 ---
 
-# Part 1 — What good looks like
-
 ## 1. Name the domain first
 
-**1.1 — The module docstring states the constraint, not the contents.**
+**1.1 — Let the module docstring state the constraint, not the contents.**
 
 httpx opens `_exceptions.py` by drawing its entire exception tree in ASCII,
 indentation-nested. That drawing *is* the design doc, and it lives with the
 classes rather than in a wiki that will rot.
 
-`nanzen_tools` does the same for an invariant:
+The contents of a package are derivable from its file tree. The invariant is not
+— and the invariant is the thing a future change will quietly violate.
 
-> Seven, and only seven. […] a fifth *table* reader means either a fifth table or
-> a tool that overlaps another, and both are decisions worth noticing.
-
-*For us:* the docstring is the first thing a reader — human or agent — loads. The
-contents are derivable from the file tree. The invariant is not, and it's the
-thing a future change will violate.
-
-**1.2 — Module names are domain nouns, not layer names.**
+**1.2 — Name modules after domain nouns, not layers.**
 
 requests: `sessions`, `adapters`, `auth`, `cookies`, `models`, `status_codes`.
 Flask: `blueprints`, `ctx`, `globals`, `templating`, `signals`, `views`.
 polars goes further and makes `dataframe/`, `lazyframe/`, `expr/`, `series/` into
-*packages*, because those objects are 10k–13k lines each.
+*packages*, because those objects run 10k–13k lines each.
 
-Both requests and Flask do have a `utils.py` / `helpers.py` — as leaves, never as
-the spine.
-
-*For us:* a `utils.py` is fine. A `utils.py` that grew into the biggest file is
-the package telling you it never had a domain.
+Both requests and Flask do keep a `utils.py` / `helpers.py` — as leaves, never as
+the spine. A `utils.py` is fine. A `utils.py` that grew into the biggest file in
+the package is the package telling you it never had a domain.
 
 **1.3 — One package, one vocabulary.**
 
@@ -62,7 +49,8 @@ SQLAlchemy splits `sql/` (Core expression language) from `orm/` (unit of work):
 different vocabularies, so different subpackages, each with its own thin front
 door — `orm/__init__.py` is 171 lines over a 4.8 MB subtree.
 
-*For us:* if reading the package needs two glossaries, it's two packages.
+If reading the package requires two glossaries, consider whether it's two
+packages.
 
 ## 2. Draw the public surface
 
@@ -78,44 +66,40 @@ door — `orm/__init__.py` is 171 lines over a 4.8 MB subtree.
   self-flagged leak: `from polars._utils.wrap import wrap_df  # TODO: remove need
   for importing wrap utils at top level`.
 
-*For us:* `__init__.py` is what a reader loads first to learn the package.
-Fifteen names teach the shape; two hundred hide it.
+`__init__.py` is what a reader loads first to learn the package. Fifteen names
+teach the shape; two hundred hide it.
 
-**2.2 — Re-export explicitly, always.**
+**2.2 — Re-export explicitly.**
 
 ```python
 from .core import Command as Command   # PEP 484 explicit re-export
 ```
 
 click's entire `__init__.py` is 62 lines of that form; Flask's is 62 lines of it
-too. httpx instead hand-maintains an `__all__` of 67 names. Either tells a type
-checker the name is public API — a bare `from .x import Y` does not.
+too. httpx instead hand-maintains an `__all__` of 67 names. Either form tells a
+type checker the name is public API — a bare `from .x import Y` does not.
 
-Never `from .x import *` at the front door.
+Avoid `from .x import *` at the front door.
 
-**2.3 — Two layers of `__all__`.**
+**2.3 — Consider two layers of `__all__`.**
 
 httpx's private modules each declare their own `__all__` (`_client.py`'s is
 exactly `["USE_CLIENT_DEFAULT", "AsyncClient", "Client"]`), which is what makes
 the package-level star-imports safe. Module `__all__` gates what leaks upward;
 package `__all__` is the contract.
 
-**2.4 — Type aliases are not free to export.**
+**2.4 — Think twice before exporting a type alias.**
 
 httpx defines `URLTypes`, `HeaderTypes`, `QueryParamTypes`, `TimeoutTypes` in
 `_types.py` — and that module's `__all__` is only
 `["AsyncByteStream", "SyncByteStream"]`. The unions were deliberately
-un-exported (deprecated 0.26, removed 0.28). requests' new `_types.py` says it
-outright: *"These types are not part of the public API and must not be relied
-upon by external code."*
+un-exported. requests' `_types.py` says it outright: *"These types are not part of
+the public API and must not be relied upon by external code."*
 
-Why: a published union freezes every accepted input shape forever.
+An exported alias becomes the thing everyone annotates with. Widening one input
+then turns into an edit everywhere instead of a one-line change.
 
-*For us:* still holds, in a weaker form. An exported alias becomes the thing
-everyone annotates with, and then widening one input is a repo-wide edit instead
-of a one-line one.
-
-**Doesn't transfer — `_`-prefix as enforcement.**
+**2.5 — Use `_` prefixes as a signal, not a wall.**
 
 httpx has *zero* public modules; every file is `_`-prefixed. It then rewrites
 `__module__` on every export so even `repr()` and tracebacks teach the supported
@@ -129,13 +113,14 @@ for __name in __all__:
 ```
 
 That machinery buys the freedom to split, merge or rename `_client.py` without
-breaking strangers. You don't have strangers. What survives is the weaker, still
-real signal: a `_`-prefixed module tells the next reader *this is not
-load-bearing, change it freely*. Use it for that, not as a wall.
+breaking anyone. Whether it's worth the effort depends entirely on who your
+callers are. What's cheap and always worth it is the signal itself: a
+`_`-prefixed module tells the next reader *this is not load-bearing, change it
+freely*.
 
 ## 3. Build three altitudes
 
-**3.1 — The convenience layer is *implemented as* the layer below it.**
+**3.1 — Implement the convenience layer *as* the layer below it.**
 
 `requests.api.request` is nine lines:
 
@@ -145,8 +130,7 @@ def request(method, url, **kwargs):
         return session.request(method=method, url=url, **kwargs)
 ```
 
-polars does the same thing across a language boundary. `DataFrame.filter`, in
-full:
+polars does the same across a language boundary. `DataFrame.filter`, in full:
 
 ```python
 return (
@@ -160,11 +144,10 @@ That pattern repeats at ten sites in `frame.py`. SQLAlchemy's async layer is the
 sync core behind greenlets, not a second implementation; the ORM is built *on*
 Core, not beside it.
 
-Why: two user-facing surfaces, one implementation — drift becomes structurally
-impossible rather than merely tested against.
-
-*For us:* the highest-leverage rule in this document. It costs nothing at design
-time and a rewrite later.
+Two user-facing surfaces over one implementation means drift is structurally
+impossible rather than merely tested against. This is probably the
+highest-leverage idea in this document — it costs nothing at design time and a
+rewrite later.
 
 **3.2 — Document the shortcut's cost where it's taken.**
 
@@ -174,16 +157,16 @@ requests, in a code comment rather than an FAQ:
 > leaving sockets open which can trigger a ResourceWarning in some cases, and look
 > like a memory leak in others.
 
-*For us:* the reader who needs this is reading the source, not the docs.
+The reader who needs this is reading the source, not the docs.
 
-**3.3 — The escape hatch goes in the docstring of the thing you'd subclass.**
+**3.3 — Put the escape hatch in the docstring of the thing you'd subclass.**
 
 `HTTPAdapter`'s docstring is a three-line runnable example of mounting it.
 `BaseTransport.handle_request` opens with *"Developers shouldn't typically ever
 need to call into this API directly"* — a public method labelled
 implementer-facing rather than caller-facing.
 
-**3.4 — Never overload `None` for "unset".**
+**3.4 — Don't overload `None` for "unset".**
 
 Four packages, four sentinels: httpx `USE_CLIENT_DEFAULT`, rich `NoChange`,
 attrs `NOTHING`, pydantic `PydanticUndefined`.
@@ -195,8 +178,8 @@ checker. httpx exports its sentinel so it can appear in signatures, while the
 docstring says *"user code shouldn't need to use the USE_CLIENT_DEFAULT
 constant."*
 
-*For us:* applies to any three-state parameter. The bug this prevents is silent
-and gets found in production.
+Applies to any three-state parameter. The bug it prevents is silent and gets
+found in production.
 
 ## 4. Put the seam where the change happens
 
@@ -211,18 +194,29 @@ and gets found in production.
 - rich `Segment` is a 3-field `NamedTuple`. Every renderable yields Segments;
   every output backend consumes them.
 
-*For us:* measure a seam by that ratio. If the interface is as big as what's
+Measure a candidate seam by that ratio. If the interface is as big as what sits
 behind it, it isn't a seam — it's a rename.
 
-**4.2 — The package defines the Protocol; the host implements it.**
+**4.2 — Prefer an abstract base class; reach for `Protocol` only for duck typing.**
 
-Flask declares its pluggable classes as *class attributes* — `json_provider_class`,
-`response_class`, `url_rule_class`, and even `test_client_class`. Extension means
-subclass and reassign. No registry, no config, no entry points.
+An ABC is the better default. It's discoverable (`help()` shows it, IDEs jump to
+it), it gives you a place to put shared behaviour and docstrings, `abstractmethod`
+fails loudly at instantiation rather than silently at the first call, and
+`isinstance` works without ceremony.
 
-*For us:* `nanzen_canonical` owns `CanonicalDataLoader`; the backend owns the
-tables and the connection, so the backend implements it. The dependency arrow
-points at the abstraction, which is why the data layer never imports the app.
+requests' `BaseAdapter` is a plain base class with two `NotImplementedError`
+stubs. Flask's `JSONProvider` is an ABC with `dumps` / `loads` / `response`, and
+`DefaultJSONProvider` subclasses it. Both are the shape to copy: a small base
+class, a first-party implementation of it, and a docstring on each method saying
+what an implementer must guarantee.
+
+`Protocol` earns its place when you genuinely cannot require inheritance —
+third-party types you don't control, or objects that should participate by shape
+alone. rich is the clean example: `__rich__`, `__rich_console__`,
+`__rich_measure__`, `__rich_repr__` behind `runtime_checkable` Protocols, so any
+object can render without importing rich at all. That's duck typing, and it's the
+right tool there. It is not the right tool for "my package needs a storage
+backend."
 
 **4.3 — Ship the test double next to the seam.**
 
@@ -234,23 +228,27 @@ SQLAlchemy ships `sqlalchemy/testing/` **in the wheel**, including
 `testing/suite/` — a conformance suite third-party dialect authors run against
 their driver. The extension point comes with a certification harness.
 
-*For us:* `nanzen_canonical.loader.StaticLoader` is exactly this. Testability is
-public API, not an afterthought for consumers to reinvent.
+If you define an interface, define a fake for it in the same module. Testability
+is public API, not an afterthought for consumers to reinvent.
 
-**4.4 — Extension is overriding one method, not registering a plugin.**
+**4.4 — Extension should be overriding one method, not registering a plugin.**
+
+Flask declares its pluggable classes as *class attributes* —
+`json_provider_class`, `response_class`, `url_rule_class`, and even
+`test_client_class`. Extension means subclass and reassign. No registry, no
+config, no entry points.
 
 FastAPI: subclass `APIRoute`, override `get_route_handler()`, set
 `router.route_class` — you can now wrap every handler without middleware. Its
 testing seam, `app.dependency_overrides`, is a plain `dict[Callable, Callable]`
-keyed by the original callable: zero API. rich requires no inheritance at all —
-four dunders (`__rich__`, `__rich_console__`, `__rich_measure__`,
-`__rich_repr__`) behind `runtime_checkable` Protocols.
+keyed by the original callable: zero API.
 
-*For us:* prefer a Protocol or one overridable method to a registry. A registry
-earns its keep only when the implementations are genuinely unknown at build time.
+A registry earns its keep when the implementations are genuinely unknown at build
+time. Otherwise a subclass or an overridable method is less to learn and less to
+maintain.
 
-Worth stealing verbatim if you ever dispatch on duck typing, from rich's
-`protocol.py`:
+If you do dispatch on duck typing, rich's `protocol.py` is worth stealing
+verbatim:
 
 ```python
 _GIBBERISH = """aihwerij235234ljsdnp34ksodfipwoe234234jlskjdf"""
@@ -263,12 +261,12 @@ def rich_cast(renderable: object) -> "RenderableType":
 ```
 
 Duck-typed dispatch has two failure modes at scale — objects that answer
-`hasattr` for everything (`Mock`, proxies), and `__rich__` chains that cycle.
-Both handled explicitly, both in five lines.
+`hasattr` for everything (`Mock`, proxies), and chains that cycle. Both handled
+explicitly, in five lines.
 
 ## 5. Errors are an API
 
-**5.1 — One root, multiply-inheriting the stdlib exception that fits.**
+**5.1 — Decide on a root, and inherit the stdlib exception that fits.**
 
 `RequestException(IOError)` — so pre-existing `except IOError` code keeps
 working. Then diamonds, on purpose: `ConnectTimeout(ConnectionError, Timeout)` is
@@ -281,8 +279,8 @@ attrs goes the *other* way and has no common root at all —
 the behavior of namedtuples by using the same error message and subclassing
 AttributeError."* Substitutability beat catchability, deliberately.
 
-*For us:* pick the tradeoff consciously and write the reason in the docstring.
-Both are defensible. Silence is not.
+Both are defensible. Pick the tradeoff consciously and write the reason in the
+docstring; silence is the only wrong answer here.
 
 **5.2 — Split "your data was bad" from "you used this wrong".**
 
@@ -296,10 +294,10 @@ Both are defensible. Silence is not.
   `StreamError(RuntimeError)`, docstring *"The developer made an error in
   accessing the request stream in an invalid way."*
 
-*For us:* this is the split that matters most. A retry loop that catches your own
-misuse retries forever.
+This is the split that matters most. A retry loop that catches your own misuse
+retries forever.
 
-**5.3 — The message is failure + context + what to do.**
+**5.3 — Make the message failure + context + what to do.**
 
 - `raise_for_status()` produces `"404 Client Error: Not Found for url: https://…"`
   — status, reason **and url**. It decodes the reason with a latin-1 fallback
@@ -317,7 +315,7 @@ context = f'\n  File "{self.endpoint_file}", line {self.endpoint_line}, in {self
 ```
 
 - Flask's `@setupmethod` — nine lines of decorator on `route`, `add_url_rule`,
-  `before_request`, `register_blueprint` — converts a whole class of silent,
+  `before_request`, `register_blueprint` — converts a class of silent,
   thread-timing-dependent bugs into a loud error naming the offending method:
   *"The setup method 'route' can no longer be called on the application. It has
   already handled its first request, any changes will not be applied
@@ -342,27 +340,19 @@ pydantic's `ValidationError` is the case study:
 - and it's privacy-tunable: `errors(include_url=…, include_context=…,
   include_input=…)`. `include_input=False` is how you keep PII out of logs.
 
-*For us:* any error crossing a package boundary should be branchable without
-string matching.
-
-**Doesn't transfer — stable error-code URLs.** SQLAlchemy gives every exception a
-four-character code (`IntegrityError` = `gkpj`, `MissingGreenlet` = `xd2s`)
-rendered as `https://sqlalche.me/e/20/gkpj`, with the version token stamped in at
-import so the link resolves to the docs for the version actually installed. It
-exists so message text can be reworded without invalidating a decade of Stack
-Overflow answers and users' alerting greps. You can reword yours and fix the greps
-in the same commit.
+Any error crossing a package boundary should be branchable without string
+matching.
 
 ## 6. Types are the contract
 
 **6.1 — Ship `py.typed`.**
 
 All ten exemplars do. requests shipped it in 2.34.0 after a decade of relying on
-typeshed, and treated it as user-visible API — the type changes in 2.34.1 and
-2.34.2 each got a changelog entry with migration advice.
+typeshed, and treated it as user-visible API — the type changes in the two
+following patch releases each got a changelog entry with migration advice.
 
-*For us:* a package without `py.typed` is invisible to a type checker from the
-outside. Every import from it is `Any`, silently. It's a one-byte file.
+A package without `py.typed` is invisible to a type checker from the outside.
+Every import from it is `Any`, silently. It's a one-byte file.
 
 **6.2 — Keep the type vocabulary private and central.**
 
@@ -407,8 +397,7 @@ has `tests/typing/` under both checkers. pydantic runs `tests/typechecking/`
 under mypy *and* pyright, mandating `assert_type()` for positives and paired
 ignore comments for negatives.
 
-*For us:* free, fast, and it catches contract regressions no runtime test can.
-The cheapest high-value item on this list.
+Cheap, fast, and it catches contract regressions no runtime test can.
 
 **6.5 — When the type system loses, say so in the source.**
 
@@ -423,29 +412,23 @@ The cheapest high-value item on this list.
 
 The deeper lesson is SQLAlchemy's: `ext/mypy/`, its 1.4-era type-checker plugin,
 still ships but is deprecated. 2.0 reshaped the runtime API — `Mapped[T]`,
-`mapped_column` — until PEP 484 could express it. **A type-checker plugin is a
-signal your API isn't expressible.**
+`mapped_column` — until PEP 484 could express it. A type-checker plugin is often
+a signal that the API isn't expressible.
 
 ## 7. Docs the compiler can't check
 
-**7.1 — Make the examples executable.**
+**7.1 — Make the examples real code.**
 
-- requests: `addopts = "--doctest-modules"`. Docstring examples are contracts.
-- polars runs `tests/docs/run_doctest.py` over every docstring example, including
-  the ones showing rendered box-drawn tables. Its exception classes are defined
-  twice — once imported from Rust, once in pure Python under `except ImportError`
-  *"for documentation purposes when there is no binary"* — so the docs build
-  without a compiler and Sphinx still sees real docstrings.
-- FastAPI: `[tool.coverage.run] source = ["docs_src", "tests", "fastapi"]`. **77
-  directories of tutorial code, measured for coverage.** An uncovered tutorial
-  shows up as a coverage gap.
-- pydantic collects fenced snippets from inside docstrings and asserts their
-  `#> output` blocks — which is why `AfterValidator`'s docstring can contain a
-  full `ValidationError` dump that cannot rot.
-- rich: 47 of its 78 modules end in a runnable `if __name__ == "__main__":` demo.
-  `python -m rich.table` works.
+FastAPI keeps **77 directories** of tutorial code under `docs_src/` as importable
+modules, imported by the test suite and measured for coverage:
+`[tool.coverage.run] source = ["docs_src", "tests", "fastapi"]`. An uncovered
+tutorial shows up as a coverage gap.
 
-*For us:* an example that isn't run is a comment with syntax highlighting.
+rich takes the lighter version: 47 of its 78 modules end in a runnable
+`if __name__ == "__main__":` demo, so `python -m rich.table` renders a table.
+Executable documentation that doubles as a smoke test.
+
+An example that is never run is a comment with syntax highlighting.
 
 **7.2 — Document the constraint the implementer will get wrong.**
 
@@ -455,6 +438,8 @@ precisely the ones people miss:
 > - `convert` must accept values that are already the correct type.
 > - It must be able to convert a value if the `ctx` and `param` arguments are
 >   `None`. This can occur when converting prompt input.
+
+When you write an ABC, this is what its method docstrings are for.
 
 **7.3 — Record *why*, especially where the code looks wrong.**
 
@@ -481,182 +466,104 @@ which is not the obvious one:
 Not "to break cycles" — a function-body import under contention can hand out a
 half-initialized module.
 
-**7.4 — Make import cost a tested contract, if you're the kind of package where it
-matters.**
-
-click's `tests/test_imports.py::test_light_imports` spawns a subprocess with
-`builtins.__import__` monkeypatched, records every module click pulls in, and
-asserts the set is a subset of a 26-name stdlib allowlist. pydantic runs a
-subprocess test asserting `pydantic.deprecated`, `pydantic.fields` and
-`pydantic.types` are **not** in `sys.modules` after `from pydantic import
-BaseModel` — guarding its lazy `__getattr__` router against silent degradation.
-
-*For us:* worth it when a package is imported by a CLI, a cold-start worker, or a
-test suite that pays the cost thousands of times. Not otherwise. Know which you
-are.
-
-## 8. Changing a package others depend on
-
-The graph, as of writing:
-
-```
-nanzen_canonical   ← (nothing)
-nanzen_metrics     ← canonical
-nanzen_audit       ← canonical
-nanzen_tools       ← canonical, metrics, audit, common_tools, connectors
-agent_core         ← common_tools, llm
-nanzen_agents      ← agent_core, canonical, metrics, tools, common_tools
-```
-
-**8.1 — Know your dependents before you change a signature.**
-
-```bash
-grep -l '"nanzen-metrics"' packages/*/pyproject.toml apps/*/pyproject.toml
-```
-
-This is the whole reason we get to skip everything in 8.2. Use it.
-
-**8.2 — A breaking change and every call site land in one PR. That is our
-deprecation cycle.**
-
-The published packages can't do that, and the cost is enormous:
-
-- pydantic hand-catalogued **~190 removed symbols** in `_migration.py` so each one
-  produces a specific `PydanticImportError` instead of a generic `AttributeError`
-  — plus thirteen five-line tombstone modules that exist only so
-  `import pydantic.utils` resolves and hits the router, plus `pydantic/v1/`: the
-  entire previous major, vendored, with a script to re-sync it.
-- SQLAlchemy used a whole release as a runway — `SQLALCHEMY_WARN_20=1` for
-  *opt-in* deprecation noise, `create_engine(future=True)` to run 2.0 semantics
-  inside 1.4, `__allow_unmapped__` to migrate file by file — and split its
-  warnings into `RemovedIn20Warning` / `MovedIn20Warning` / `LegacyAPIWarning` so
-  consumers could filter *removed*, *moved* and *legacy-but-supported* separately.
-- click wrote a metaclass so a deprecated alias still passes `isinstance`:
-
-```python
-class _FakeSubclassCheck(type):
-    def __subclasscheck__(cls, subclass): return issubclass(subclass, cls.__bases__[0])
-    def __instancecheck__(cls, instance): return isinstance(instance, cls.__bases__[0])
-```
-
-None of that is a virtue. It is the price of unreachable callers. **Don't pay it
-voluntarily.**
-
-**8.3 — A cycle is a seam error, not an import problem.**
-
-Both large exemplars needed real machinery and both treated it as structural:
-polars added `_reexport.py` (23 lines — *"Re-export Polars functionality to avoid
-cyclical imports"*); SQLAlchemy built a `preloaded` registry that imports ~55
-modules *after* package init, declaring the same names under `if TYPE_CHECKING:`
-so type checkers see through the indirection.
-
-*For us:* at our scale a cycle means two packages are one package, or a Protocol
-belongs in the lower one. Fix the design; don't reach for a function-body import.
-
-**8.4 — If you do add runtime indirection, pay for it with a static mirror.**
-
-polars guards its module-level `__getattr__` — which serves deprecated aliases —
-behind a `TYPE_CHECKING` check, and says why:
-
-```python
-if not TYPE_CHECKING:
-    # This causes typechecking to resolve any Polars module attribute
-    # as Any regardless of existence so we check for TYPE_CHECKING, see #24334.
-    def __getattr__(name: str) -> Any:
-```
-
-An unguarded module-level `__getattr__` makes *every* attribute on the package
-type-check as `Any`, silently killing typo detection across every consumer.
-SQLAlchemy pays the same tax the same way, declaring its ~55 preloaded modules as
-real imports under `if TYPE_CHECKING:`.
-
-**What we deliberately don't copy:** semver and changelogs (one `VERSION.txt`, one
-repo), deprecation-warning vintages, tombstone modules, import shims, vendored
-previous majors, stable error-code URLs, `_`-privacy as access control. Every one
-of them exists to serve a caller you cannot reach.
-
 ---
 
-# Part 2 — Applying it
+## Worked example — `requests`, end to end
 
-## The short version
-
-Starting a package, in order:
-
-1. Write the `__init__.py` docstring **first**. State the boundary and the
-   invariant — what this package is *not* responsible for is usually the more
-   useful half.
-2. Name modules after domain nouns. If you reach for `core.py`, the domain isn't
-   named yet.
-3. Decide what the front door exports. Default to *few*: the vocabulary, not the
-   machinery. Use `from .x import Y as Y` or an explicit `__all__`.
-4. Build the convenience API *on top of* the general one, in the same file, so the
-   two can't drift.
-5. Find the one thing that will change — the store, the transport, the model — and
-   put a Protocol there. Ship a static/fake implementation of it beside the real
-   one.
-6. Decide the error split before you write the first `raise`: bad input vs. caller
-   misuse. Attach context to the exception object.
-7. Add `py.typed`. Keep type aliases in a private module. Add one non-executed
-   type-check file asserting your public shapes.
-8. Place the package in the dependency DAG before you add its first import. An
-   edge that closes a cycle is a design error.
-
-## Worked example — `nanzen_canonical`
-
-Four modules and a facade. Small enough to walk end to end.
+`requests` is small enough to walk through all seven sections, and it makes most
+of the choices above visibly.
 
 ```
-nanzen_canonical/
-  __init__.py     vocabulary re-exports, 3 names
-  vocabulary.py   Book, TransactionKind, ALL_COMPANIES
-  data.py         CanonicalData — one company's four tables as a frozen value
-  derive.py       the invoice ↔ settlement join
-  loader.py       CanonicalDataLoader (the seam) + StaticLoader (the double)
+requests/
+  __init__.py      21 curated names
+  api.py           get/post/put/… — 158 lines, ~90% docstring
+  sessions.py      Session: cookies, pooling, defaults
+  adapters.py      BaseAdapter (the seam) + HTTPAdapter (700+ lines)
+  models.py        Request, PreparedRequest, Response
+  auth.py          AuthBase — callable, one method
+  cookies.py  structures.py  status_codes.py  hooks.py
+  _types.py  _internal_utils.py       (private)
 ```
 
-**1 · Domain.** The docstring leads with the *boundary*, not the contents: the four
-canonical sources are declared by the backend's Alembic chain, and *"that DDL is
-the schema's only spelling."* The package holds *"everything about the model that
-is not schema."* A reader who came here to add a column learns in the first
-paragraph that they're in the wrong file — rule 7.2, applied to a package rather
-than a Protocol.
+**1 · Domain.** Twenty flat modules, zero nesting, every name a noun from HTTP:
+`sessions`, `adapters`, `auth`, `cookies`, `status_codes`. Nothing is called
+`core` or `base` or `manager`. `utils.py` exists but is a leaf, not the spine.
 
-**2 · Surface.** Three names: `Book`, `TransactionKind`, `ALL_COMPANIES`.
-`CanonicalData` and `CanonicalDataLoader` are deliberately one import deeper.
-That's rich's bet: the front door teaches the *vocabulary*, the module tree is the
-index for the machinery. Most callers only ever need to name a book.
+**2 · Surface.** Twenty-one exports out of a codebase with hundreds of callables
+— and only ten of the ~24 exception classes, chosen as the ones you'd realistically
+catch. `requests.utils`, `requests.adapters` and `requests.auth` are documented
+public modules, so "no underscore" genuinely means public; `_internal_utils.py`
+and `_types.py` carry the prefix and mean it.
 
-**3 · Altitudes.** `Book` / `TransactionKind` (closed value sets, no I/O) →
-`CanonicalData` (a frozen value you can construct in a test with three lines) →
-`CanonicalDataLoader` (the seam that touches a database). Each rung is optional;
-a caller who only needs to name a book never meets a connection.
+**3 · Altitudes.** Four rungs, each a strict superset, and the top one is
+*implemented as* the next:
 
-**4 · Seam.** `CanonicalDataLoader` is defined here, in the *lower* package, and
-implemented by the backend — which owns the tables and the connection. The
-dependency arrow points at the abstraction, so the data layer never imports the
-app. `StaticLoader` ships beside it (rule 4.3), which is what makes every
-downstream consumer — `nanzen_metrics`, `nanzen_audit`, `nanzen_tools`,
-benchmarks — testable without a database.
+| rung | entry | buys you |
+|---|---|---|
+| 1 | `requests.get(url)` | works; closes the socket |
+| 2 | `Session()` | cookie persistence, pooling, defaults |
+| 3 | `Session.mount(prefix, HTTPAdapter(max_retries=…))` | retries, pool sizing, per-host routing |
+| 4 | subclass `BaseAdapter` / override `HTTPAdapter.init_poolmanager` | replace the transport |
 
-**5 · Errors.** The package raises nothing of its own today, which is honest: it's
-a vocabulary and a value type. When it needs to, rule 5.2 sets the split — *"the
-frame you handed me is malformed"* (caller misuse) is a different exception from
-*"there is no data for this company in this window"* (an expected data state), and
-conflating them is how a retry loop spins forever.
+Rung 1 is nine lines that open a `Session` and delegate — the shortcut cannot
+behave differently from the thing it wraps. The cost of rung 1 is stated in a code
+comment right where it's paid (§3.2). `head()` differs from the generic path by
+exactly one line, `kwargs.setdefault("allow_redirects", False)`, and the docstring
+calls the divergence out rather than letting it surprise you.
 
-**6 · Types.** The `Protocol` in `loader.py` *is* the type contract, and it's in
-the right place — the consumer of an abstraction should own it. The natural next
-step is rule 6.4: a five-line non-executed file asserting `StaticLoader` satisfies
-`CanonicalDataLoader`, so an accidental signature change fails in CI rather than
-at the first backend deploy.
+**4 · Seam.** `BaseAdapter` is two methods, `send()` and `close()`. Seven hundred
+lines of `HTTPAdapter` sit behind it, and the whole ecosystem — mocking,
+caching, request signing — plugs in there. It's a base class with
+`NotImplementedError` stubs, not a Protocol, and `HTTPAdapter` ships as the
+reference implementation of its own interface (§4.2).
 
-**7 · Docs.** The docstring cross-references its own siblings with `:mod:` and
-`:class:` roles, and names the migration that owns the schema
-(`0049_canonical_tables`). Someone can navigate the whole package without opening
-a second file.
+`Session.mount()` keeps adapters in an `OrderedDict` sorted by prefix length, so
+`mount("http://api.example.com", …)` wins over `mount("http://", …)` — the
+routing rule is a property of the data structure rather than a special case.
 
-**8 · Dependencies.** Zero. It is the root of the DAG, which is exactly why
-`metrics`, `audit`, `tools` and `agents` can all depend on it without a cycle.
-Adding a dependency here would be the most expensive edge in the repo — every
-package above inherits it.
+`AuthBase.__call__(r: PreparedRequest) -> PreparedRequest` is duck typing done
+right: any callable works, and it predates `Protocol` entirely.
+
+The `prepare_request()` / `send()` split is public, so you can inspect or mutate a
+fully-realized request before it goes out. Most HTTP clients hide that boundary.
+
+Restraint worth noting: `hooks.py` is 33 lines and `HOOKS = ["response"]`, with a
+candid `# TODO: response is the only one`. They shipped a one-event hook system
+instead of an extensible-in-principle registry nobody would use (§4.4).
+
+**5 · Errors.** One root, `RequestException(IOError)`, so old `except IOError`
+code survives. Diamonds where they help the caller:
+`ConnectTimeout(ConnectionError, Timeout)`, `MissingSchema(RequestException,
+ValueError)`. `__init__` attaches `.request` and `.response` and back-fills one
+from the other (§5.4). Every leaf docstring is one line describing the
+*situation*, not the class — `ConnectTimeout`: *"Requests that produced this error
+are safe to retry."* Warnings get their own parallel root, `RequestsWarning`.
+
+`JSONDecodeError` multiply-inherits `InvalidJSONError` and the stdlib
+`JSONDecodeError`, and overrides `__reduce__` so pickling picks the right parent's
+reducer — with a six-line comment explaining the MRO trap. That comment is §7.3
+in action.
+
+**6 · Types.** `py.typed` plus a private `_types.py` whose docstring says it is not
+public API. The facade problem — how do you type seven verbs that all forward
+`**kwargs` — is solved with PEP 692 rather than duplicating a fifteen-parameter
+signature seven times:
+
+```python
+def request(method: str, url: _t.UriType, **kwargs: Unpack[_t.RequestKwargs]) -> Response: ...
+def get(url: _t.UriType, params: _t.ParamsType = None, **kwargs: Unpack[_t.GetKwargs]) -> Response: ...
+```
+
+`BaseRequestKwargs(TypedDict, total=False)` holds the shared keys; `GetKwargs`,
+`PostKwargs` and friends add only what that verb accepts — so the per-verb
+divergence that used to live in prose now lives in the type system. Duck-typed
+inputs get `runtime_checkable` Protocols (`SupportsRead`, `SupportsItems`), and
+`is_prepared()` returns `TypeIs[_ValidatedRequest]` to narrow a lifecycle, with a
+docstring that admits the Liskov violation instead of hiding it (§6.5).
+
+**7 · Docs.** Docstrings are Sphinx field-lists with cross-references, so
+`requests.api.request`'s docstring *is* the API reference page. `api.py` is ~90%
+docstring by volume, which is the right ratio for a facade module. Tests run
+against a real HTTP server and a real TLS server with a purpose-built certificate
+that has a `commonName` but no `subjectAltName` — because you cannot test an HTTP
+library's certificate semantics with mocks, and they don't pretend otherwise.
