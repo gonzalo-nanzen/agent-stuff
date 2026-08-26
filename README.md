@@ -15,3 +15,9 @@ many repos.
   operations, configuration, robustness, naming. Adapted from
   [clig.dev](https://clig.dev/), with `git` walked end to end as a worked
   example.
+- [`guides/backend-app-guide.md`](guides/backend-app-guide.md) — building and
+  improving a backend service, adapted from
+  [The Twelve-Factor App](https://12factor.net/). Each factor carries the
+  observable signals of a deviation and the legitimate reasons to deviate, plus
+  what has aged since 2011 and what the industry has added. Ends with an audit
+  procedure ordered by blast radius.
