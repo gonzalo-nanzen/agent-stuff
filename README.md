@@ -21,3 +21,11 @@ many repos.
   observable signals of a deviation and the legitimate reasons to deviate, plus
   what has aged since 2011 and what the industry has added. Ends with an audit
   procedure ordered by blast radius.
+- [`guides/python-style-guide.md`](guides/python-style-guide.md) — writing
+  Python that reads consistently: tooling, imports, errors, state, everyday
+  expressions, docstrings, type annotations, formatting and naming. Adapted from
+  the [Google Python Style Guide](https://google.github.io/styleguide/pyguide.html),
+  keeping the reasoning behind each rule and flagging the parts that only exist
+  because Google is a monorepo. Retooled for ruff and ty, with deliberate
+  departures where we disagree: f-strings everywhere (logging included) and no
+  `assert` outside tests.
